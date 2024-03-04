@@ -1,0 +1,269 @@
+---
+title: "Competing risks"
+author: "Nigus"
+date: "2024-03-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## import the data
+```{r}
+install.packages("riskRegression")
+library(riskRegression)
+data("Melanoma")
+```
+
+## explore the data
+```{r}
+str(Melanoma)
+head(Melanoma)
+```
+
+## 2. Graphically depict the event time distribution for the event of interest (i.e., death as a result of melanoma) and distinguish between censored and uncensored observations.
+```{r}
+# Histogram of the observed event times 
+A = Melanoma$time[Melanoma$status == 0]
+B = Melanoma$time[Melanoma$status == 1]
+C = Melanoma$time[Melanoma$status == 2]
+c1 = "lightblue"; c2 = "pink"; c3 = "orange";
+b <- min(c(A,B,C)) - 0.001
+e <- max(c(A,B,C))
+ax <- pretty(b:e, n = 12)
+# Set the minimum for the breakpoints
+# Set the maximum for the breakpoints
+# Make a neat vector for the breakpoints
+hgA <- hist(A, breaks = ax, plot = FALSE) # Save first histogram data 
+hgB <- hist(B, breaks = ax, plot = FALSE) # Save second histogram data 
+hgC <- hist(C, breaks = ax, plot = FALSE) # Save second histogram data
+par(mfrow = c(1,1))
+plot(hgA, col = c1, main = "Event times", xlab = "Time (in days)")
+plot(hgB, col = c2, add = TRUE)
+plot(hgC, col = c3, add = TRUE)
+```
+
+# Competing risks analysis - Combined analysis
+## A first approach towards analysing competing risks survival data is to combine all events. This combined analysis provides insights into the overall hazard function.
+## 1. Estimate the overall cumulative incidence function using the Kaplan-Meier estimator for the survival function.
+```{r}
+# Estimation of the overall cumulative incidence function
+#--------------------------------------------------------- 
+library(survival)
+surv_object <- Surv(time = Melanoma$time,
+                    event = as.numeric(Melanoma$status != 0))
+plot(surv_object, main = "Kaplan-Meier estimator for S(t)",
+     xlab = "Time (in days)", ylab = "S(t)")
+```
+
+```{r}
+fit_combined <- survfit(surv_object ~ 1, data = Melanoma)
+head(summary(fit_combined))
+```
+
+```{r}
+plot(fit_combined$time, 1-fit_combined$surv, lwd = 2, col = 2, type = "l",
+     main = "Kaplan-Meier estimator for the overall CIF(t)",
+     xlab = "Time (in days)", ylab = "Overall CIF", ylim = c(0, 0.6))
+lines(fit_combined$time, 1-fit_combined$lower, lwd = 2, col = 2, lty = 2)
+lines(fit_combined$time, 1-fit_combined$upper, lwd = 2, col = 2, lty = 2)
+```
+
+# Non-parametric estimation of the (cause-specific) hazard function
+## 1. Estimate the marginal cumulative distribution function (CIF). More specifically, ignore the competing risk and consider such observations as being (right-)censored for the event of interest.
+```{r}
+# Kaplan-Meier estimator for the marginal CIF 
+library(survival)
+surv_object <- Surv(time = Melanoma$time,
+                    event = as.numeric(Melanoma$status == 1))
+plot(surv_object, main = "Kaplan-Meier estimator for S(t)",
+     xlab = "Time (in days)", ylab = "S(t)")
+```
+```{r}
+fit1 <- survfit(surv_object ~ 1, data = Melanoma)
+head(summary(fit1))
+```
+```{r}
+plot(fit1$time, 1-fit1$surv, lwd = 2, col = 2, type = "l",
+     main = "Kaplan-Meier estimator for CIF(t)",
+     xlab = "Time (in days)", ylab = "Marginal CIF", ylim = c(0,0.5))
+lines(fit1$time, 1-fit1$lower, lwd = 2, col = 2, lty = 2)
+lines(fit1$time, 1-fit1$upper, lwd = 2, col = 2, lty = 2)
+```
+
+# ADDITIONAL INFORMATION: Hereunder we demonstrate that bias is introduced in the estimation of the marginal CIF in case of dependence between event times T1 and T2. In the simulation approach considered below, we impose association using a copula approach (i.e., a copula is a function that can be used to join two marginal distributions into a joint bivariate distribution for two random variables) in which a single copula parameter measures the strength of association (theta) between the two random variables. The marginal distributions for T1 and T2 are assumed to be exponential with exponential rates lambda1 and lambda2. Independent censoring (exponential process with parameter cparam) is generated, for example, induced by administrative censoring. We consider different scenarios and investigate the impact on the estimated marginal CIF.
+## • In scenario 1, we assume that the rate of occurrence of event 1 is larger than the rate of occurrence of event 2 (the competing risk).
+## • In scenario 2, we assume that the rate of occurrence of event 1 is smaller than the rate of occurrence of event 2 (the competing risk)
+```{r}
+library(copula)
+# Generating dependent competing risks (T1, T2) and independent censoring time C #-------------------------------------------------------------------------------- 
+clayton.cmprsk.simul <- function(sample_size, hazard = "EXP",
+                                             param1, param2, theta_parm,
+                                             cens_hazard = "EXP", cparam, seednr){
+       set.seed(seednr);
+       random_samples <- rCopula(copula=claytonCopula(theta_parm, dim = 2), n=sample_size)
+       u = random_samples[,1]; v = random_samples[,2];
+if (hazard == "EXP"){
+# message("Data generation: param-vector should include rate parameter"); 
+t1 = -log(1-u)/param1[1];
+t2 = -log(1-v)/param2[1];
+}
+if (hazard == "WEIBULL"){
+# message("Data generation: param-vector should include shape and decay parameters, # resp.");
+t1 = (-log(1-u)/(param1[2]))**(1/param1[1]);
+t2 = (-log(1-v)/(param2[2]))**(1/param2[1]);
+}
+if (cens_hazard == "EXP"){
+w = runif(sample_size, 0, 1); 
+ct = -log(w)/cparam[1]; 
+status = rep(0, sample_size) 
+for (i in 1:sample_size){
+if (t1[i] <= t2[i]){ 
+ if (t1[i] <= ct[i]){
+               status[i] = 1
+             }
+}
+if (t1[i] > t2[i]){
+if (t2[i] <= ct[i]){ status[i] = 2
+} }
+}
+    t = pmin(pmin(t1, t2), ct);
+  }
+if (cens_hazard == "WEIBULL"){
+w = runif(sample_size, 0, 1)
+ct = (-log(w)/(cparam[2]))**(1/cparam[1]); status = rep(0, sample_size)
+for (i in 1:sample_size){
+if (t1[i] <= t2[i]){ if (t1[i] <= ct[i]){
+          status[i] = 1
+        }
+}
+if (t1[i] > t2[i]){
+if (t2[i] <= ct[i]){ status[i] = 2
+} }
+}
+    t = pmin(pmin(t1, t2), ct);
+  }
+  simul.data = data.frame(t1 = t1, t2 = t2, ct = ct, t = t, status)
+  return(simul.data)
+}
+# Scenario 1: T1 preceeds T2 most frequently 
+#--------------------------------------------
+dat = clayton.cmprsk.simul(sample_size = 5000, hazard = "EXP",
+param1 = 0.03, param2 = 0.01,
+theta_parm = 2,
+cens_hazard = "EXP",
+cparam = 0.005,
+seednr = 12345)
+# True marginal CIF 
+#-------------------
+lambda = 0.03
+grid = seq(0,100,1)
+true_cif = 1 - exp(-lambda*grid)
+# Estimate the marginal CIF 
+#---------------------------
+# library(survival)
+surv_object <- Surv(time = dat$t,
+                    event = as.numeric(dat$status == 1))
+# plot(surv_object, main = "Kaplan-Meier estimator for S(t)",
+#      xlab = "Time (in days)", ylab = "S(t)")
+fit_sim1 <- survfit(surv_object ~ 1)
+par(mfrow = c(1,1))
+plot(fit_sim1$time, 1-fit_sim1$surv, lwd = 2, col = 2, type = "l",
+     main = "Scenario1",
+     xlab = "Time (in days)", ylab = "Marginal CIF",
+     xlim = c(0, 100))
+lines(fit_sim1$time, 1-fit_sim1$lower, lty = 2, col = 2)
+lines(fit_sim1$time, 1-fit_sim1$upper, lty = 2, col = 2)
+lines(grid, true_cif, lwd = 2, col = "blue")
+```
+
+```{r}
+# Scenario 2: T2 preceeds T1 most frequently 
+#--------------------------------------------
+#--------------------------------------------
+dat = clayton.cmprsk.simul(sample_size = 5000, hazard = "EXP",
+                           param1 = 0.01, param2 = 0.03,
+                           theta_parm = 2,
+                           cens_hazard = "EXP",
+                           cparam = 0.005,
+                           seednr = 12345)
+# head(dat)
+# True marginal CIF #-------------------
+lambda = 0.01
+grid = seq(0,100,1)
+true_cif = 1 - exp(-lambda*grid)
+
+# Estimate the marginal CIF 
+#---------------------------
+# library(survival)
+surv_object <- Surv(time = dat$t,
+                    event = as.numeric(dat$status == 1))
+# plot(surv_object, main = "Kaplan-Meier estimator for S(t)",
+#      xlab = "Time (in days)", ylab = "S(t)")
+fit_sim2 <- survfit(surv_object ~ 1)
+plot(fit_sim2$time, 1-fit_sim2$surv, lwd = 2, col = 2, type = "l",
+     main = "Scenario2",
+     xlab = "Time (in days)", ylab = "Marginal CIF",
+     xlim = c(0, 100))
+lines(fit_sim2$time, 1-fit_sim2$lower, lty = 2, col = 2)
+lines(fit_sim2$time, 1-fit_sim2$upper, lty = 2, col = 2)
+lines(grid, true_cif, lwd = 2, col = "blue")
+```
+
+# 3. The cumulative incidence functions (CIFs) for different causes, i.e., cause-specific CIFs, are used for the statistical description of survival data with competing risks. In order to do so, the Kaplan-Meier (KM) estimator can be used in case there are no competing risks OR when competing risks are assumed to be independent (see above). However, the KM method provides biased estimates in case the independence assumption is violated (i.e., the event time distributions for individuals that do experience or do not experience the competing event are different), hence, one should estimate cause-specific CIFs to gain additional insights into the nature of the survival data under study. The cuminc() function is the R package cmprsk can be used to estimate the cause-specific CIFs. Estimate the cause-specific CIF for death related to melanoma and for death related to another cause.
+```{r}
+# Estimation of the cause-specific CIF 
+#--------------------------------------
+library(cmprsk)
+cif <- cuminc(ftime = Melanoma$time, fstatus = Melanoma$status, cencode = 0)
+plot(cif, col=1, xlab="Time (in days)", ylab = "Cause-specific CIFs",
+     lty = c(1,2), lwd = 2)
+lines(fit1$time, 1-fit1$surv, lwd = 2, col = 2)
+```
+
+## 4. The cuminc() function also allows for the estimation of the cause-specific CIFs for different groups of patients, for example, males and females. Look in the documentation of the function to estimate the cause-specific CIFs for females and males separately.
+```{r}
+# Estimation of the cause-specific CIFs for males and females #------------------------------------------------------------- 
+library(cmprsk)
+cif_gender <- cuminc(ftime = Melanoma$time, fstatus = Melanoma$status,
+                     group=Melanoma$sex)
+plot(cif_gender, col=1:4, xlab="Time (in days)", ylab = "Cause-specific CIFs",
+     lty = c(1,1,2,2), lwd = 2)
+```
+
+## 6. In order to perform a formal statistical test to check whether the difference between males and females is different, a modified χ2-statistic can be considered (Gray, 1988). Perform this test (see documentation cuminc() function). Interpret the result.
+```{r}
+cif_gender$Test
+```
+
+# Cause-specific hazard regression
+## A cause-specific hazard regression model is used to investigate the effect of different covariates directly on the cause-specific hazard function (i.e., the rate of occurrence of a specific cause/event). A cause-specific hazard regression model can be fitted using the standard Cox proportional hazards regression model while treating failures from the cause of interest as events and failure from other causes as censored observations. The effect of covariates on the cause-specific hazard can be estimated using the partial likelihood method as proposed by Cox. Such a model is fit using the coxph() function in the survival package in R.
+
+## 1. Assess the impact of gender, age and invasion on the cause-specific hazard function for dying as a result of the melanoma.
+```{r}
+# Cox PH model for cause-specific hazards regression 
+csh <- coxph(Surv(time, status==1) ~ sex+age+invasion,data=Melanoma) 
+summary(csh)
+```
+
+# NOTE: Alternatively, cause-specific regression can also be performed using the CSC() function contained in the riskRegression package in R.
+```{r}
+library(prodlim)
+library(riskRegression)
+csh_ext<-CSC(Hist(time,status)~sex+age+invasion,data=Melanoma)
+print(csh_ext)
+```
+
+# Subdistribution hazard regression
+## A subdistribution hazard regression model is also referred to as the Fine and Gray model. The motivation for the use of the Fine and Gray model is that the effect of a covariate on the cause-specific hazard function may be quite different from that on the cumulative incidence. In other words, a covariate may have strong influence on the cause-specific hazard, but no effect on the CIF. The difference between cause-specific hazard regression and subdistribution hazard regression is that both hazard functions rely on a different treatment of the competing risk events. The former considers competing risk events as non-informative censoring, whereas the latter takes into account the informative censoring nature of the competing risk events.
+
+## The Fine and Gray model can be fitted using the FGR() function in the riskRegression package in R.
+
+## 1. Consider the Fine and Gray model for the example at hand. More specifically, fit a subdistribution hazards regression model with gender, age and invasion as covariates.
+```{r}
+# Fine and Gray model for subdistribution hazards regression 
+shm <- FGR(Hist(time,status)~sex+age+invasion,data=Melanoma) 
+shm
+```
+
